@@ -5,6 +5,7 @@ import icy.image.IcyBufferedImageUtil;
 import icy.sequence.Sequence;
 import icy.type.DataType;
 import plugins.adufour.ezplug.*;
+import plugins.dbrasseur.qssim.quaternion.Quat;
 
 import java.util.ArrayList;
 
