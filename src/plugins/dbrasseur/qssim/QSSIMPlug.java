@@ -4,6 +4,7 @@ import icy.image.IcyBufferedImage;
 import icy.image.IcyBufferedImageUtil;
 import icy.sequence.Sequence;
 import icy.type.DataType;
+import icy.type.collection.array.Array1DUtil;
 import plugins.adufour.ezplug.*;
 import plugins.dbrasseur.qssim.quaternion.Quat;
 
@@ -30,6 +31,8 @@ public class QSSIMPlug extends EzPlug{
 	protected void execute() {
         Sequence src = EzSrcSeq.getValue();
         Sequence deg = EzDegSeq.getValue();
+        Sequence res = new Sequence();
+
 		ArrayList<IcyBufferedImage> srcImages = src.getAllImage();
 		ArrayList<IcyBufferedImage> degImages = deg.getAllImage();
         int maxindex = Math.min(srcImages.size(), degImages.size());
@@ -37,8 +40,14 @@ public class QSSIMPlug extends EzPlug{
 		{
 			IcyBufferedImage srcImg = IcyBufferedImageUtil.convertToType(srcImages.get(i), DataType.DOUBLE,true);
 			IcyBufferedImage degImg = IcyBufferedImageUtil.convertToType(degImages.get(i), DataType.DOUBLE,true);
-			double qssim = QSSIM.computeQSSIM(srcImg, degImg);
-			System.out.println(qssim);
+			double[] qssim_map = QSSIM.computeQSSIM(srcImg, degImg);
+			double mqssim = meanArray(qssim_map);
+			System.out.println(mqssim);
+			IcyBufferedImage map = new IcyBufferedImage(srcImg.getWidth(), srcImg.getHeight(), 1, DataType.DOUBLE);
+			map.setDataXY(0, qssim_map);
+			res.addImage(map);
+			res.setChannelName(i, "QSSIM : "+src.getChannelName(i)+" / " + deg.getChannelName(i));
+			if(i==0) addSequence(res);
 		}
 	}
 
@@ -49,5 +58,12 @@ public class QSSIMPlug extends EzPlug{
 		EzDegSeq = new EzVarSequence("Degraded sequence");
 		super.addEzComponent(EzSrcSeq);
 		super.addEzComponent(EzDegSeq);
+	}
+
+	private static double meanArray(double[] arr)
+	{
+		double sum=0;
+		for(double d : arr) sum+=d;
+		return sum/arr.length;
 	}
 }
