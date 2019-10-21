@@ -1,32 +1,81 @@
 package plugins.dbrasseur.qssim;
 
 import icy.image.IcyBufferedImage;
+import icy.image.IcyBufferedImageUtil;
+import icy.type.DataType;
 import plugins.dbrasseur.qssim.quaternion.Quat;
 
 public class QSSIM {
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg){return computeQSSIM(ref, deg, 0.01, 0.03);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2){return computeQSSIM(ref, deg, K1, K2, 1.5);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double std){return computeQSSIM(ref, deg, K1, K2, std, std);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double stdX, double stdY)
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg)throws IllegalArgumentException{return computeQSSIM(ref, deg, 0.01, 0.03);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, 255);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, dynamicRange, 1.5);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, double std)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, dynamicRange, std, std);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, double stdX, double stdY) throws IllegalArgumentException
     {
+        //Images checkup
+        if(ref == null || deg == null)
+        {
+            throw new IllegalArgumentException("Null image");
+        }else{
+            if(ref.getSizeC() != deg.getSizeC() || ref.getSizeX() != deg.getSizeX() || ref.getSizeY() != deg.getSizeY())
+            {
+                throw new IllegalArgumentException("Images dimensions don't match");
+            }else if(ref.getSizeX() == 0 || ref.getSizeY() == 0){
+                throw new IllegalArgumentException("Bad images size : X:"+ref.getSizeX()+" Y:"+ref.getSizeY()+" C:"+ref.getSizeC());
+            }else if(ref.getDataType_() != deg.getDataType_()){
+                throw new IllegalArgumentException("Mismatched image Data Types");
+            }else if(K1 <= 0 || K2 <= 0)
+            {
+                throw new IllegalArgumentException("Invalid regularisation parameter, must be >= 0");
+            }else if(dynamicRange < 1)
+            {
+                throw new IllegalArgumentException("Invalid dynamic range, must be >= 1, rapported to an 8 bits integer");
+            }else if(stdX < 0 || stdY < 0)
+            {
+                throw new IllegalArgumentException("Invalid standard deviation for the kernel, must be >= 0");
+            }
+        }
         int w = ref.getWidth();
         int h = ref.getHeight();
-        //Images checkup
-        //TODO
+
+        DataType imgType = ref.getDataType_();
+        switch(imgType){
+            case UBYTE:
+            case BYTE:
+                dynamicRange/=0xFF;
+                break;
+            case USHORT:
+            case SHORT:
+                dynamicRange/=0xFFFF;
+                break;
+            case UINT:
+            case INT:
+                dynamicRange/=0xFFFFFFFF;
+                break;
+            case ULONG:
+            case LONG:
+                dynamicRange/=0xFFFFFFFFFFFFFFFFL;
+                break;
+            default:
+                //Nothing to do
+                break;
+        }
+
+        final Quat C1=new Quat(K1*K1*dynamicRange*dynamicRange, 0, 0, 0);
+        final Quat C2=new Quat(K2*K2*dynamicRange*dynamicRange, 0, 0, 0);
 
         //Convert image to Quaternions
-        Quat[] refq = imageToQuaternionf(ref);
-        Quat[] degq = imageToQuaternionf(deg);
+        Quat[] refq = imageToQuaternionf(IcyBufferedImageUtil.convertToType(ref,DataType.DOUBLE, true));
+        Quat[] degq = imageToQuaternionf(IcyBufferedImageUtil.convertToType(deg,DataType.DOUBLE, true));
 
-        final Quat C1=new Quat(K1*K1, 0, 0, 0);
-        final Quat C2=new Quat(K2*K2, 0, 0, 0);
+
 
         double[] qssim_map = new double[w*h];
         final double[][] kernel = createGaussian(stdX, stdY);
         final Quat[][] paddedRef = pad_mirror(refq, w, h, kernel.length);
         final Quat[][] paddedDeg = pad_mirror(degq, w, h, kernel.length);
         final int nbProc = Runtime.getRuntime().availableProcessors() <= 0 ? 1 : Runtime.getRuntime().availableProcessors();
-        int padding = kernel.length/2;
+        final int padding = kernel.length/2;
         Thread[] threads = new Thread[nbProc];
         for(int p=0; p<nbProc; p++)
         {
@@ -54,31 +103,6 @@ public class QSSIM {
         }
 
         return qssim_map;
-/*
-
-        //Compute mean luminance : muq (13)
-        Quat muq_ref = meanLuminancef(refq);
-        Quat muq_deg = meanLuminancef(degq);
-
-        //Substract the mean luminance from the image : acq (15)
-        Quat[] acq_ref = chrominancef(refq, muq_ref);
-        Quat[] acq_deg = chrominancef(degq, muq_deg);
-
-        //Compute color contrast sigmaq(17)
-        Quat sigmaq_ref_sq = contrastf(acq_ref, w, h);
-        Quat sigmaq_deg_sq = contrastf(acq_deg, w, h);
-
-        //Compute cross correlation (20)
-        Quat sigmaq_ref_deg = crossCorrelationf(acq_ref, acq_deg, w, h);
-
-        //Compute QSSIM (between 20 and 21)
-        Quat num1 = Quat.mul(2.0, Quat.mul(muq_ref, muq_deg.conjugate())).add(C1);
-        Quat num2 = Quat.mul(2.0,sigmaq_ref_deg).add(C2);
-        Quat den1 = Quat.mul(muq_ref, muq_ref.conjugate()).add(Quat.mul(muq_deg, muq_deg.conjugate())).add(C1);
-        Quat den2 = Quat.add(sigmaq_deg_sq, sigmaq_ref_sq).add(C2);
-
-        return Quat.mul(Quat.mul(num1,num2), Quat.mul(den1, den2).inverse()).norm();
-*/
     }
 
     private static Quat[][] extract2D(Quat[][] im, int centerX, int centerY, int radius)
@@ -225,7 +249,6 @@ public class QSSIM {
             {
                 result.add(Quat.mul(ref[i][j], deg[i][j].conjugate()).mul(weight[i][j]));
             }
-
         }
         return result.mul(1.0/((w-1)*(h-1)));
     }
@@ -298,7 +321,7 @@ public class QSSIM {
         Quat[] refq = new Quat[img.getWidth()*img.getHeight()];
         for(int i=0; i<img.getWidth()*img.getHeight(); i++)
         {
-            refq[i] = new Quat(0.0, ref_pixels[0][i], ref_pixels[1][i], ref_pixels[2][i]);
+            refq[i] = new Quat(0.0, ref_pixels[0][i], ref_pixels[img.getSizeC() < 3 ? 0 : 1][i], ref_pixels[img.getSizeC() < 3 ? 0: 2][i]);
         }
         return refq;
     }
@@ -314,5 +337,15 @@ public class QSSIM {
         }
         return mean.mul(1.0/img.length);
 
+    }
+
+
+
+    public static double meanArray(double[] arr)
+    {
+        if(arr.length == 0) return 0;
+        double sum=0;
+        for(double d : arr) sum+=d;
+        return sum/arr.length;
     }
 }
