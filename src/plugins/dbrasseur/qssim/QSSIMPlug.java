@@ -11,6 +11,7 @@ import plugins.adufour.ezplug.*;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.ArrayList;
 
 /**
  * Implementation of "Quaternion Structural Similarity: A New Quality Index for Color Images" by Kolaman and Yadid
@@ -22,6 +23,7 @@ public class QSSIMPlug extends EzPlug{
 
 	private EzVarSequence	EzSrcSeq;				//Source Sequence
     private EzVarSequence   EzDegSeq;               //Degraded Sequence
+    private EzVarInteger	EzDivider;				//Number of degraded images per reference
 	private EzVarDouble		EzL;					//Dynamic range parameter
 	private EzVarDouble		EzK1;					//K1 parameter
 	private EzVarDouble		EzK2;					//K2 parameter
@@ -38,6 +40,12 @@ public class QSSIMPlug extends EzPlug{
 	protected void execute() {
         Sequence src = EzSrcSeq.getValue();
         Sequence deg = EzDegSeq.getValue();
+        Integer divider = EzDivider.getValue();
+        if(divider == 0)
+        {
+        	//auto split
+        	divider = Math.max(1, deg.getNumImage()/src.getNumImage());
+        }
         if(src == null || deg==null)
 		{
 			MessageDialog.showDialog("Please open an image first.", MessageDialog.ERROR_MESSAGE);
@@ -49,24 +57,34 @@ public class QSSIMPlug extends EzPlug{
         double stdY = EzSigmaY.getValue();
         double L = EzL.getValue();
         Sequence res = new Sequence();
-
-		IcyBufferedImage srcImg = src.getFirstImage();
-		IcyBufferedImage degImg = deg.getFirstImage();
-		if(srcImg.getWidth() != degImg.getWidth() || srcImg.getHeight() != degImg.getHeight())
-		{
-			MessageDialog.showDialog("Image dimensions ", MessageDialog.ERROR_MESSAGE);
-			return;
-		}
-		if(srcImg.getSizeC() < 3) srcImg = toGreyscale(srcImg);
-		if(srcImg.getSizeC() < 3) degImg = toGreyscale(degImg);
-		double[] qssim_map = QSSIM.computeQSSIM(srcImg, degImg, K1, K2, L, stdX, stdY);
-		double mqssim = QSSIM.meanArray(qssim_map);
-		new AnnounceFrame("The mean QSSIM between "+ src.getName() + " and "+deg.getName() + " is "+mqssim);
-		System.out.println("The mean QSSIM between "+ src.getName() + " and "+deg.getName() + " is "+mqssim);
-		IcyBufferedImage map = new IcyBufferedImage(srcImg.getWidth(), srcImg.getHeight(), 1, DataType.DOUBLE);
-		map.setDataXY(0, qssim_map);
-		map = IcyBufferedImageUtil.convertToType(map, DataType.UBYTE, true);
-		res.addImage(map);
+        for(int srci=0; srci < src.getNumImage(); srci++)
+        {
+        	IcyBufferedImage srcImg = src.getImage(srci, 0);
+        	boolean grey = srcImg.getSizeC() < 3;
+    		if(grey) srcImg = toGreyscale(srcImg);
+    		
+    		for(int i=0; i<divider; i++)
+    		{
+    			IcyBufferedImage degImg = deg.getImage(i, srci);
+    			if(srcImg.getWidth() != degImg.getWidth() || srcImg.getHeight() != degImg.getHeight())
+    			{
+    				MessageDialog.showDialog("Image dimensions ", MessageDialog.ERROR_MESSAGE);
+    				return;
+    			}
+    			
+    			if(grey) degImg = toGreyscale(degImg);
+    			double[] qssim_map = QSSIM.computeQSSIM(srcImg, degImg, K1, K2, L, stdX, stdY);
+    			double mqssim = QSSIM.meanArray(qssim_map);
+    			new AnnounceFrame("The mean QSSIM between "+ src.getName()  + "_" + srci + " and "+deg.getName() + "_" + i + " is "+mqssim);
+    			System.out.println("The mean QSSIM between "+ src.getName()  + "_" + srci + " and "+deg.getName() + "_" + i + " is "+mqssim);
+    			IcyBufferedImage map = new IcyBufferedImage(srcImg.getWidth(), srcImg.getHeight(), 1, DataType.DOUBLE);
+    			map.setDataXY(0, qssim_map);
+    			map = IcyBufferedImageUtil.convertToType(map, DataType.UBYTE, true);
+    			res.addImage(map);
+    			
+    		}
+        }
+		
 		res.setName("QSSIM : "+src.getName()+" / " + deg.getName());
 		addSequence(res);
 	}
@@ -83,10 +101,12 @@ public class QSSIMPlug extends EzPlug{
 	@Override
 	protected void initialize() {
 		super.setTimeDisplay(true);
-		EzSrcSeq = new EzVarSequence("Sequence 1");
-		EzSrcSeq.setToolTipText("First sequence");
-		EzDegSeq = new EzVarSequence("Sequence 2");
-		EzDegSeq.setToolTipText("Second sequence");
+		EzSrcSeq = new EzVarSequence("Reference");
+		EzSrcSeq.setToolTipText("Reference sequence");
+		EzDegSeq = new EzVarSequence("Degraded");
+		EzDegSeq.setToolTipText("Degraded sequence");
+		EzDivider = new EzVarInteger("nDeg/ref", 0, Integer.MAX_VALUE, 1);
+		EzDivider.setToolTipText("Number of degraded images per reference image, 0 = auto");
 		EzL = new EzVarDouble("Dynamic Range",255, 1, Integer.MAX_VALUE, 1);
 		EzL.setToolTipText("Dynamic range of the image (typically 255 for 8 bits/pixel)");
 		EzK1 = new EzVarDouble("K1", 0.01, Double.MIN_NORMAL, Double.MAX_VALUE, 0.0001);
@@ -100,6 +120,7 @@ public class QSSIMPlug extends EzPlug{
 		EzGroup parameters = new EzGroup("Parameters", EzL, EzK1, EzK2, EzSigmaX, EzSigmaY);
 		super.addEzComponent(EzSrcSeq);
 		super.addEzComponent(EzDegSeq);
+		super.addEzComponent(EzDivider);
 		super.addEzComponent(parameters);
 		EzButton ezHelp = new EzButton("Informations about QSSIM", (e -> printInformations()));
 		super.addEzComponent(ezHelp);
