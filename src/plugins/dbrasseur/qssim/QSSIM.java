@@ -251,11 +251,11 @@ public class QSSIM {
         Quat[][] acq_deg = chrominance(deg, muq_deg);
 
         //Compute color contrast sigmaq(17)
-        Quat sigmaq_ref_sq = contrast(acq_ref, weight);
-        Quat sigmaq_deg_sq = contrast(acq_deg, weight);
+        Quat sigmaq_ref_sq = correlation(acq_ref, acq_ref, weight);
+        Quat sigmaq_deg_sq = correlation(acq_deg, acq_deg, weight);
 
         //Compute cross correlation (20)
-        Quat sigmaq_ref_deg = crossCorrelation(acq_ref, acq_deg, weight);
+        Quat sigmaq_ref_deg = correlation(acq_ref, acq_deg, weight);
 
         //Compute QSSIM (between 20 and 21)
         Quat num1 = Quat.mul(2.0, Quat.mul(muq_ref, muq_deg.conjugate())).add(C1);
@@ -267,35 +267,30 @@ public class QSSIM {
     }
 
     /**
-     * Cross correlation between chrominances
-     * @param ref Reference
-     * @param deg Degraded
-     * @param weight
-     * @return
+     * Correlation between chrominances
+     * @param win1 First window
+     * @param win2 Second window
+     * @param weight Gaussian Window
+     * @return Correlation
      */
-    private static Quat crossCorrelation(Quat[][] ref, Quat[][] deg, double[][] weight) {
+    private static Quat correlation(Quat[][] win1, Quat[][] win2, double[][] weight) {
         Quat result = new Quat();
         for(int i=0; i<weight.length; i++)
         {
             for(int j=0; j<weight[i].length; j++)
             {
-                result.add(Quat.mul(ref[i][j], deg[i][j].conjugate()).mul(weight[i][j]));
+                result.add(Quat.mul(win1[i][j], win2[i][j].conjugate()).mul(weight[i][j]));
             }
         }
         return result;
     }
 
-    private static Quat contrast(Quat[][] ac, double[][] weight) {
-        Quat sum=new Quat();
-        for(int i=0; i<weight.length; i++){
-            for(int j=0; j<weight[i].length; j++)
-            {
-                sum.add(Quat.mul(ac[i][j], ac[i][j].conjugate()).mul(weight[i][j]));
-            }
-        }
-        return sum;
-    }
-
+    /**
+     * Computes the chrominance
+     * @param im window
+     * @param mean luminance
+     * @return chrominance window
+     */
     private static Quat[][] chrominance(Quat[][] im, Quat mean) {
         Quat[][] res = new Quat[im.length][im[0].length];
         for(int i=0; i<im.length; i++)
@@ -308,6 +303,12 @@ public class QSSIM {
         return res;
     }
 
+    /**
+     * Computes the mean luminance
+     * @param im window
+     * @param weight gaussian window
+     * @return mean luminance
+     */
     private static Quat meanLuminance(Quat[][] im, double[][] weight) {
         Quat sum= new Quat();
         for(int i=0; i<im.length; i++)
@@ -320,6 +321,13 @@ public class QSSIM {
         return sum;
     }
 
+    /**
+     * Converts an image into its quaternion array form
+     * @param img Image
+     * @param newSizes Output the new size in case of downsampling
+     * @param autoDownsample Enables automatic downsampling
+     * @return Quaternion version of the image
+     */
     public static Quat[] imageToQuaternionf(IcyBufferedImage img, int[] newSizes, boolean autoDownsample)
     {
         double[][] ref_pixels = img.getDataXYCAsDouble();
@@ -335,6 +343,7 @@ public class QSSIM {
         	f = (int) Math.max(1, Math.round(Math.min(w, h)/256.0));
             double filtervalue = 1.0/(f*f);
             int foff = f%2 == 0 ? -f/2+1 : -f/2;
+            //Mirror filtering
             for(int c=0; c<3; c++)
             {
                 for(int i=0; i<img.getHeight(); i++)
@@ -382,7 +391,8 @@ public class QSSIM {
         {
         	for(int j=0; j<newSizes[0]; j++)
         	{
-        		refq[out++] = new Quat(0.0, base[0][i*f*w+j*f]/Math.sqrt(3), base[1][i*f*w+j*f]/Math.sqrt(3), base[2][i*f*w+j*f]/Math.sqrt(3));
+                int index = i * f * w + j * f;
+                refq[out++] = new Quat(0.0, base[0][index]/Math.sqrt(3), base[1][index]/Math.sqrt(3), base[2][index]/Math.sqrt(3));
         	}
         }
         
@@ -390,7 +400,11 @@ public class QSSIM {
     }
 
 
-
+    /**
+     * Computes the mean of the array
+     * @param arr Array
+     * @return Mean
+     */
     public static double meanArray(double[] arr)
     {
         if(arr.length == 0) return 0;

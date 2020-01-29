@@ -15,7 +15,7 @@ import java.awt.*;
 /**
  * Implementation of "Quaternion Structural Similarity: A New Quality Index for Color Images" by Kolaman and Yadid
  * @author Dylan Brasseur
- * @version 1.3
+ * @version 1.3.1
  *
  */
 public class QSSIMPlug extends EzPlug{
@@ -41,16 +41,17 @@ public class QSSIMPlug extends EzPlug{
         Sequence src = EzSrcSeq.getValue();
         Sequence deg = EzDegSeq.getValue();
         Integer divider = EzDivider.getValue();
+		if(src == null || deg==null)
+		{
+			MessageDialog.showDialog("Please open an image first.", MessageDialog.ERROR_MESSAGE);
+			return;
+		}
         if(divider == 0)
         {
         	//auto split
         	divider = Math.max(1, deg.getNumImage()/src.getNumImage());
         }
-        if(src == null || deg==null)
-		{
-			MessageDialog.showDialog("Please open an image first.", MessageDialog.ERROR_MESSAGE);
-			return;
-		}
+
         double K1 = EzK1.getValue();
         double K2 = EzK2.getValue();
         double stdX = EzSigmaX.getValue();
@@ -90,7 +91,11 @@ public class QSSIMPlug extends EzPlug{
 		res.setName("QSSIM : "+src.getName()+" / " + deg.getName());
 		addSequence(res);
 	}
-
+	/**
+	 * Converts a single channel image to its 3 channel greyscale equivalent
+	 * @param srcImg Image
+	 * @return Greyscale image
+	 */
 	private IcyBufferedImage toGreyscale(IcyBufferedImage srcImg) {
 		System.out.println("Converting image from greyscale as it doesn't have at least 3 components");
 		IcyBufferedImage newSrc = new IcyBufferedImage(srcImg.getWidth(), srcImg.getHeight(), 3, DataType.DOUBLE);
