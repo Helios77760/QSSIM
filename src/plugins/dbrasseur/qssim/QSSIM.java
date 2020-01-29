@@ -5,12 +5,27 @@ import icy.image.IcyBufferedImageUtil;
 import icy.type.DataType;
 import plugins.dbrasseur.qssim.quaternion.Quat;
 
+//Main implementation class
 public class QSSIM {
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg)throws IllegalArgumentException{return computeQSSIM(ref, deg, 0.01, 0.03);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, 255);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, dynamicRange, 1.5);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, double std)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, dynamicRange, std, std);}
-    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, double stdX, double stdY) throws IllegalArgumentException
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, int[] map_size, boolean downsample)throws IllegalArgumentException{return computeQSSIM(ref, deg, 0.01, 0.03, map_size, downsample);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, int[] map_size, boolean downsample)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, 255, map_size, downsample);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, int[] map_size, boolean downsample)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, dynamicRange, 1.5, map_size, downsample);}
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, double std, int[] map_size, boolean downsample)throws IllegalArgumentException{return computeQSSIM(ref, deg, K1, K2, dynamicRange, std, std, map_size, downsample);}
+    
+    /**
+     * Computes the QSSIM map between 2 images
+     * @param ref Reference image
+     * @param deg Degraded image
+     * @param K1 Regularisation constant
+     * @param K2 Regularisation constant
+     * @param dynamicRange dynamic range of the input image
+     * @param stdX Standard deviation in the X direction of the gaussian kernel window
+     * @param stdY Standard deviation in the Y direction of the gaussian kernel window
+     * @param map_size Output for the final map size (potentially downsampled)
+     * @return QSSIM map array
+     * @throws IllegalArgumentException if the images are not proper
+     */
+    public static double[] computeQSSIM(IcyBufferedImage ref, IcyBufferedImage deg, double K1, double K2, double dynamicRange, double stdX, double stdY, int[] map_size, boolean downsample) throws IllegalArgumentException
     {
         //Images checkup
         if(ref == null || deg == null)
@@ -33,62 +48,72 @@ public class QSSIM {
             }else if(stdX < 0 || stdY < 0)
             {
                 throw new IllegalArgumentException("Invalid standard deviation for the kernel, must be >= 0");
+            }else if(map_size == null)
+            {
+            	throw new IllegalArgumentException("Map size output is null");
             }
         }
-        int w = ref.getWidth();
-        int h = ref.getHeight();
-
+        
+        double L = dynamicRange;
+        //Get the datatype to adjust the range
         DataType imgType = ref.getDataType_();
         switch(imgType){
             case UBYTE:
             case BYTE:
-                dynamicRange/=0xFF;
+                L/=0xFF;
                 break;
             case USHORT:
             case SHORT:
-                dynamicRange/=0xFFFF;
+                L/=0xFFFF;
                 break;
             case UINT:
             case INT:
-                dynamicRange/=0xFFFFFFFF;
+                L/=0xFFFFFFFF;
                 break;
             case ULONG:
             case LONG:
-                dynamicRange/=0xFFFFFFFFFFFFFFFFL;
+                L/=0xFFFFFFFFFFFFFFFFL;
                 break;
             default:
                 //Nothing to do
                 break;
         }
+        
+        //Get number of processors for multi-threading
+        final int nbProc = Runtime.getRuntime().availableProcessors() <= 0 ? 1 : Runtime.getRuntime().availableProcessors();
+        Thread[] threads = new Thread[nbProc];
 
-        final Quat C1=new Quat(K1*K1*dynamicRange*dynamicRange, 0, 0, 0);
-        final Quat C2=new Quat(K2*K2*dynamicRange*dynamicRange, 0, 0, 0);
+        //Define regularisation constants
+        final Quat C1=new Quat(K1*K1*L*L, 0, 0, 0);
+        final Quat C2=new Quat(K2*K2*L*L, 0, 0, 0);
 
         //Convert image to Quaternions
-        Quat[] refq = imageToQuaternionf(IcyBufferedImageUtil.convertToType(ref,DataType.DOUBLE, true));
-        Quat[] degq = imageToQuaternionf(IcyBufferedImageUtil.convertToType(deg,DataType.DOUBLE, true));
-
-
-
-        double[] qssim_map = new double[w*h];
+        Quat[] refq = imageToQuaternionf(IcyBufferedImageUtil.convertToType(ref,DataType.DOUBLE, true), map_size, downsample);
+        Quat[] degq = imageToQuaternionf(IcyBufferedImageUtil.convertToType(deg,DataType.DOUBLE, true), map_size, downsample);
+        
+        //Get the weight kernel
         final double[][] kernel = createGaussian(stdX, stdY);
-        final Quat[][] paddedRef = pad_mirror(refq, w, h, kernel.length);
-        final Quat[][] paddedDeg = pad_mirror(degq, w, h, kernel.length);
-        final int nbProc = Runtime.getRuntime().availableProcessors() <= 0 ? 1 : Runtime.getRuntime().availableProcessors();
         final int padding = kernel.length/2;
-        Thread[] threads = new Thread[nbProc];
+        
+        //Modify the sizes to accomodate the window
+        int imw = map_size[0];
+        int w = map_size[0] =  (map_size[0]-2*padding);
+        int h = map_size[1] =  (map_size[1]-2*padding);
+        
+        //Compute all the windows in parallel
+        double[] qssim_map = new double[w*h];
         for(int p=0; p<nbProc; p++)
         {
             final int currP=p;
             threads[p] = new Thread(()->{
-                for(int i=(currP*w*h)/nbProc; i<((currP+1)*w*h)/nbProc; i++)
+                for(int i=currP*w*h/nbProc; i<((currP+1)*w*h)/nbProc; i++)
                 {
                     int x = i/w;
                     int y = i%w;
 
-                    Quat[][] patchref = extract2D(paddedRef, x+padding, y+padding, padding);
-                    Quat[][] patchdeg = extract2D(paddedDeg, x+padding, y+padding, padding);
-                    qssim_map[x*w+y] = computeQSSIMPatch(patchref, patchdeg, kernel.length, kernel.length, C1, C2, kernel);
+                    Quat[][] patchref = extract2D(refq, x+padding, y+padding, padding, imw);
+                    Quat[][] patchdeg = extract2D(degq, x+padding, y+padding, padding, imw);
+                    qssim_map[x*w+y] = computeQSSIMPatch(patchref, patchdeg, C1, C2, kernel);
                 }
             });
             threads[p].start();
@@ -101,61 +126,40 @@ public class QSSIM {
                 e.printStackTrace();
             }
         }
-
+        
         return qssim_map;
     }
 
-    private static Quat[][] extract2D(Quat[][] im, int centerX, int centerY, int radius)
+    /**
+     * Extracts the window at the given center into a 2D array
+     * @param im Flat image
+     * @param centerX X coordinate of the center of the window 
+     * @param centerY Y coordinate of the center of the window 
+     * @param radius Radius of the window
+     * @param w Width of the flatten image
+     * @return 2D window
+     */
+    private static Quat[][] extract2D(Quat[] im, int centerX, int centerY, int radius, int w)
     {
         Quat[][] res = new Quat[radius*2+1][radius*2+1];
         for(int x=-radius; x <= radius; x++)
         {
-            for(int y=-radius; y <= radius; y++)
-            {
-                res[x+radius][y+radius] = im[centerX+x][centerY+y];
-            }
+        	System.arraycopy(im, (centerX+x)*w+centerY-radius, res[x+radius], 0, radius*2+1);
         }
         return res;
     }
 
-    private static Quat[][] pad_mirror(Quat[] im, int w, int h, int length) {
-           if(length<=1)
-           {
-               Quat[][] res = new Quat[h][w];
-               for(int i=0; i<h; i++)
-               {
-                   if (w >= 0) System.arraycopy(im, i * w, res[i], 0, w);
-               }
-               return res;
-           }else
-           {
-               assert(length%2 == 1);
-               int padding = length/2;
-               Quat[][] res = new Quat[h+2*padding][w+2*padding];
-               for(int i=0; i<h; i++)
-               {
-                   if (w >= 0) System.arraycopy(im, i * w, res[i+padding], padding, w);
-                   for(int j=0; j<padding; j++)
-                   {
-                       res[i+padding][j] = new Quat(im[i*w+(padding-j-1)]);
-                       res[i+padding][padding+w+j] = new Quat(im[i*w+w-j-1]);
-                   }
-               }
-               for(int i=0; i< padding; i++)
-               {
-                   System.arraycopy(res[2*padding-1-i], 0, res[i], 0, w+2*padding);
-                   System.arraycopy(res[h+padding-i-1], 0, res[i+padding+h], 0, w+2*padding);
-               }
-               return res;
-           }
-    }
-
+    /**
+     * Creates a gaussian window
+     * @param stdX Standard deviation in the X direction
+     * @param stdY Standard deviation in the Y direction
+     * @return 2D Gaussian window
+     */
     private static double[][] createGaussian(double stdX, double stdY) {
         double[] rawX = createGaussian1D(stdX);
         double[] rawY = createGaussian1D(stdY);
         int size = rawX.length > rawY.length ? rawX.length : rawY.length;
         double[][] kernel = new double[size][size];
-
 
         if(size > rawX.length){ // Center 1D filter
             rawX = center1D(rawX, size);
@@ -166,7 +170,8 @@ public class QSSIM {
         for(int i=0; i<rawY.length; i++){
             for(int j=0; j<rawX.length; j++)
             {
-                sum+= kernel[i][j] = rawY[i]*rawX[i];
+            	kernel[i][j] = rawY[i]*rawX[j];
+                sum+= kernel[i][j];
             }
         }
         for(int i=0; i<rawY.length; i++){
@@ -178,6 +183,12 @@ public class QSSIM {
         return kernel;
     }
 
+    /**
+     * Center a 1D array
+     * @param arr Input array
+     * @param size new size for the array
+     * @return 0 padded array of the input array
+     */
     private static double[] center1D(double[] arr, int size) {
         int pad = (size-arr.length)/2;
         double[] newRawX = new double[size];
@@ -193,6 +204,11 @@ public class QSSIM {
         return newRawX;
     }
 
+    /**
+     * Creates a Gaussian 1D array
+     * @param std Standard deviation
+     * @return 1D Gaussian array
+     */
     private static double[] createGaussian1D(double std)
     {
         if (std < 1.0e-10)
@@ -214,23 +230,32 @@ public class QSSIM {
             kernel[i]/=sum;
         return kernel;
     }
-
-    private static double computeQSSIMPatch(Quat[][] ref, Quat[][] deg, int w, int h, Quat C1, Quat C2, double[][] weight)
+    
+    /**
+     * Computes the QSSIM value of a given patch
+     * @param ref Reference patch
+     * @param deg Degraded patch
+     * @param C1 Regularisation constant
+     * @param C2 Regularisation constant
+     * @param weight Gaussian window
+     * @return QSSIM value
+     */
+    private static double computeQSSIMPatch(Quat[][] ref, Quat[][] deg, Quat C1, Quat C2, double[][] weight)
     {
         //Compute mean luminance : muq (13)
         Quat muq_ref = meanLuminance(ref, weight);
         Quat muq_deg = meanLuminance(deg, weight);
-
+        
         //Substract the mean luminance from the image : acq (15)
         Quat[][] acq_ref = chrominance(ref, muq_ref);
         Quat[][] acq_deg = chrominance(deg, muq_deg);
 
         //Compute color contrast sigmaq(17)
-        Quat sigmaq_ref_sq = contrast(acq_ref, w, h, weight);
-        Quat sigmaq_deg_sq = contrast(acq_deg, w, h, weight);
+        Quat sigmaq_ref_sq = contrast(acq_ref, weight);
+        Quat sigmaq_deg_sq = contrast(acq_deg, weight);
 
         //Compute cross correlation (20)
-        Quat sigmaq_ref_deg = crossCorrelation(acq_ref, acq_deg, w, h, weight);
+        Quat sigmaq_ref_deg = crossCorrelation(acq_ref, acq_deg, weight);
 
         //Compute QSSIM (between 20 and 21)
         Quat num1 = Quat.mul(2.0, Quat.mul(muq_ref, muq_deg.conjugate())).add(C1);
@@ -241,27 +266,34 @@ public class QSSIM {
         return Quat.mul(Quat.mul(num1,num2), Quat.mul(den1, den2).inverse()).norm();
     }
 
-    private static Quat crossCorrelation(Quat[][] ref, Quat[][] deg, int w, int h, double[][] weight) {
+    /**
+     * Cross correlation between chrominances
+     * @param ref Reference
+     * @param deg Degraded
+     * @param weight
+     * @return
+     */
+    private static Quat crossCorrelation(Quat[][] ref, Quat[][] deg, double[][] weight) {
         Quat result = new Quat();
-        for(int i=0; i<ref.length; i++)
+        for(int i=0; i<weight.length; i++)
         {
-            for(int j=0; j<ref[i].length; j++)
+            for(int j=0; j<weight[i].length; j++)
             {
                 result.add(Quat.mul(ref[i][j], deg[i][j].conjugate()).mul(weight[i][j]));
             }
         }
-        return result.mul(1.0/((w-1)*(h-1)));
+        return result;
     }
 
-    private static Quat contrast(Quat[][] ac, int w, int h, double[][] weight) {
+    private static Quat contrast(Quat[][] ac, double[][] weight) {
         Quat sum=new Quat();
-        for(int i=0; i<h; i++){
-            for(int j=0; j<w; j++)
+        for(int i=0; i<weight.length; i++){
+            for(int j=0; j<weight[i].length; j++)
             {
                 sum.add(Quat.mul(ac[i][j], ac[i][j].conjugate()).mul(weight[i][j]));
             }
         }
-        return sum.mul(1.0/((w-1)*(h-1)));
+        return sum;
     }
 
     private static Quat[][] chrominance(Quat[][] im, Quat mean) {
@@ -285,58 +317,76 @@ public class QSSIM {
                 sum.add(Quat.mul(im[i][j], weight[i][j]));
             }
         }
-        return sum.mul(1.0/(im.length*im[0].length));
+        return sum;
     }
 
-    private static Quat crossCorrelationf(Quat[] acq_ref, Quat[] acq_deg, int w, int h) {
-            Quat result = new Quat();
-            for(int i=0; i<acq_ref.length; i++)
-            {
-                result.add(Quat.mul(acq_ref[i], acq_deg[i].conjugate()));
-            }
-            return result.mul(1.0/((w-1)*(h-1)));
-    }
-
-    private static Quat contrastf(Quat[] CV, int w, int h) {
-        Quat sigma = new Quat();
-        for(Quat q : CV)
-        {
-            sigma.add(Quat.mul(q, q.conjugate()));
-        }
-        return sigma.mul(1.0/((w-1)*(h-1)));
-    }
-
-    private static Quat[] chrominancef(Quat[] img, Quat mean) {
-        Quat[] CV = new Quat[img.length];
-        for(int i=0; i < img.length; i++)
-        {
-            CV[i] = Quat.sub(img[i], mean);
-        }
-        return CV;
-    }
-
-    public static Quat[] imageToQuaternionf(IcyBufferedImage img)
+    public static Quat[] imageToQuaternionf(IcyBufferedImage img, int[] newSizes, boolean autoDownsample)
     {
         double[][] ref_pixels = img.getDataXYCAsDouble();
-        Quat[] refq = new Quat[img.getWidth()*img.getHeight()];
-        for(int i=0; i<img.getWidth()*img.getHeight(); i++)
+        
+        int w=img.getWidth();
+        int h=img.getHeight();
+        double[][] base = new double[3][w*h];
+        
+        //Automatic Downsampling
+        int f = 1;
+        if(autoDownsample)
         {
-            refq[i] = new Quat(0.0, ref_pixels[0][i], ref_pixels[img.getSizeC() < 3 ? 0 : 1][i], ref_pixels[img.getSizeC() < 3 ? 0: 2][i]);
+        	f = (int) Math.max(1, Math.round(Math.min(w, h)/256.0));
+            double filtervalue = 1.0/(f*f);
+            int foff = f%2 == 0 ? -f/2+1 : -f/2;
+            for(int c=0; c<3; c++)
+            {
+                for(int i=0; i<img.getHeight(); i++)
+                {
+                    for(int j=0; j<img.getWidth(); j++)
+                    {
+                    	base[c][i*w+j] = 0;
+                        for(int fi=0; fi<f; fi++)
+                        {
+                            int fx = i+foff+fi;
+                            if(fx < 0)
+                            {
+                                fx = -fx-1;
+                            }else if(fx >= h)
+                            {
+                            	fx = 2*h-fx-1;
+                            }
+                            for(int fj=0; fj<f; fj++)
+                            {
+                            	int fy = j+foff+fj;
+                                if(fy < 0)
+                                {
+                                    fy = -fy-1;
+                                }else if(fy >= w)
+                                {
+                                	fy = 2*w-fy-1;
+                                }
+                                base[c][i*w+j] += ref_pixels[c][fx*w+fy]*filtervalue;
+                            }
+                        }
+                    }
+                }
+            }
+        }else
+        {
+        	base = ref_pixels;
         }
+       
+        
+        newSizes[0] = w/f;
+        newSizes[1] = h/f;
+        Quat[] refq = new Quat[newSizes[1]*newSizes[0]];
+        int out=0;
+        for(int i=0; i<newSizes[1]; i++)
+        {
+        	for(int j=0; j<newSizes[0]; j++)
+        	{
+        		refq[out++] = new Quat(0.0, base[0][i*f*w+j*f]/Math.sqrt(3), base[1][i*f*w+j*f]/Math.sqrt(3), base[2][i*f*w+j*f]/Math.sqrt(3));
+        	}
+        }
+        
         return refq;
-    }
-
-
-
-    private static Quat meanLuminancef(Quat[] img)
-    {
-        Quat mean = new Quat();
-        for(Quat q : img)
-        {
-            mean.add(q);
-        }
-        return mean.mul(1.0/img.length);
-
     }
 
 

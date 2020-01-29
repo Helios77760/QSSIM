@@ -11,12 +11,11 @@ import plugins.adufour.ezplug.*;
 
 import javax.swing.*;
 import java.awt.*;
-import java.util.ArrayList;
 
 /**
  * Implementation of "Quaternion Structural Similarity: A New Quality Index for Color Images" by Kolaman and Yadid
  * @author Dylan Brasseur
- * @version 1.1
+ * @version 1.3
  *
  */
 public class QSSIMPlug extends EzPlug{
@@ -29,6 +28,7 @@ public class QSSIMPlug extends EzPlug{
 	private EzVarDouble		EzK2;					//K2 parameter
 	private EzVarDouble		EzSigmaX;				//SigmaX parameter
 	private EzVarDouble		EzSigmaY;				//SigmaY parameter
+	private EzVarBoolean	EzDownsample;			//Enables downsampling
 
 
 	@Override
@@ -56,6 +56,7 @@ public class QSSIMPlug extends EzPlug{
         double stdX = EzSigmaX.getValue();
         double stdY = EzSigmaY.getValue();
         double L = EzL.getValue();
+        boolean downsample = EzDownsample.getValue();
         Sequence res = new Sequence();
         for(int srci=0; srci < src.getNumImage(); srci++)
         {
@@ -73,11 +74,12 @@ public class QSSIMPlug extends EzPlug{
     			}
     			
     			if(grey) degImg = toGreyscale(degImg);
-    			double[] qssim_map = QSSIM.computeQSSIM(srcImg, degImg, K1, K2, L, stdX, stdY);
+    			int[] map_size = new int[2];
+    			double[] qssim_map = QSSIM.computeQSSIM(srcImg, degImg, K1, K2, L, stdX, stdY, map_size, downsample);
     			double mqssim = QSSIM.meanArray(qssim_map);
     			new AnnounceFrame("The mean QSSIM between "+ src.getName()  + "_" + srci + " and "+deg.getName() + "_" + i + " is "+mqssim);
     			System.out.println("The mean QSSIM between "+ src.getName()  + "_" + srci + " and "+deg.getName() + "_" + i + " is "+mqssim);
-    			IcyBufferedImage map = new IcyBufferedImage(srcImg.getWidth(), srcImg.getHeight(), 1, DataType.DOUBLE);
+    			IcyBufferedImage map = new IcyBufferedImage(map_size[0], map_size[1], 1, DataType.DOUBLE);
     			map.setDataXY(0, qssim_map);
     			map = IcyBufferedImageUtil.convertToType(map, DataType.UBYTE, true);
     			res.addImage(map);
@@ -101,23 +103,35 @@ public class QSSIMPlug extends EzPlug{
 	@Override
 	protected void initialize() {
 		super.setTimeDisplay(true);
+		
 		EzSrcSeq = new EzVarSequence("Reference");
 		EzSrcSeq.setToolTipText("Reference sequence");
+		
 		EzDegSeq = new EzVarSequence("Degraded");
 		EzDegSeq.setToolTipText("Degraded sequence");
+		
 		EzDivider = new EzVarInteger("nDeg/ref", 0, Integer.MAX_VALUE, 1);
 		EzDivider.setToolTipText("Number of degraded images per reference image, 0 = auto");
+		
 		EzL = new EzVarDouble("Dynamic Range",255, 1, Integer.MAX_VALUE, 1);
 		EzL.setToolTipText("Dynamic range of the image (typically 255 for 8 bits/pixel)");
+		
 		EzK1 = new EzVarDouble("K1", 0.01, Double.MIN_NORMAL, Double.MAX_VALUE, 0.0001);
 		EzK1.setToolTipText("Regularization parameter, should be as small as possible but > 0, defaults to 0.01");
+		
 		EzK2 = new EzVarDouble("K2", 0.03, Double.MIN_NORMAL, Double.MAX_VALUE, 0.0001);
 		EzK2.setToolTipText("Regularization parameter, should be as small as possible but > 0, defaults to 0.03");
+		
 		EzSigmaX = new EzVarDouble("\u03C3x", 1.5, 0, 1024, 0.1);
 		EzSigmaX.setToolTipText("Standard deviation on X of the kernel used in the window, defaults to 1.5");
+		
 		EzSigmaY = new EzVarDouble("\u03C3y", 1.5, 0, 1024, 0.1);
 		EzSigmaY.setToolTipText("Standard deviation on Y of the kernel used in the window, defaults to 1.5");
-		EzGroup parameters = new EzGroup("Parameters", EzL, EzK1, EzK2, EzSigmaX, EzSigmaY);
+		
+		EzDownsample = new EzVarBoolean("Downsample", true);
+		EzDownsample.setToolTipText("Automatically downsample the image, defaults to true");
+		
+		EzGroup parameters = new EzGroup("Parameters", EzL, EzK1, EzK2, EzSigmaX, EzSigmaY, EzDownsample);
 		super.addEzComponent(EzSrcSeq);
 		super.addEzComponent(EzDegSeq);
 		super.addEzComponent(EzDivider);
@@ -126,6 +140,7 @@ public class QSSIMPlug extends EzPlug{
 		super.addEzComponent(ezHelp);
 	}
 
+	@SuppressWarnings("deprecation")
 	private void printInformations() {
 		String    title   = "QSSIM informations";
 		JTextPane message = new JTextPane();
@@ -185,7 +200,7 @@ public class QSSIMPlug extends EzPlug{
 		dim.setSize(600, 500);
 		scroll.setPreferredSize(dim);
 		GenericFrame infoFrame = new GenericFrame(title, scroll);
-		infoFrame.addToMainDesktopPane(); //TODO Deprecated, but necessary until better is found
+		infoFrame.addToMainDesktopPane();
 		infoFrame.setVisible(true);
 		infoFrame.requestFocus();
 	}

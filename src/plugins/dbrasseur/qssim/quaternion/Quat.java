@@ -114,6 +114,12 @@ public class Quat {
     }
 
     public double squaredNorm(){return re*re+im.x*im.x+im.y*im.y+im.z*im.z;}
+    
+    @Override
+    public String toString()
+    {
+    	return re + " " + im.x + " " + im.y + " " + im.z;
+    }
 
 
 }
