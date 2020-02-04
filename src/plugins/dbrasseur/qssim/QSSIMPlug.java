@@ -67,7 +67,7 @@ public class QSSIMPlug extends EzPlug{
     		
     		for(int i=0; i<divider; i++)
     		{
-    			IcyBufferedImage degImg = deg.getImage(i, srci);
+    			IcyBufferedImage degImg = deg.getSizeZ() > 1 ? deg.getImage(i, srci) : deg.getImage(srci*divider+i, 0);
     			if(srcImg.getWidth() != degImg.getWidth() || srcImg.getHeight() != degImg.getHeight())
     			{
     				MessageDialog.showDialog("Image dimensions ", MessageDialog.ERROR_MESSAGE);
